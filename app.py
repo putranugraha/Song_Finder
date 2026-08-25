@@ -171,36 +171,67 @@ with st.container(border=True):
     )
 
 tombol_rekomendasi = st.button(
-    "Cari Lagu Mirip",
+    "Cari Rekomendasi Seimbang",
     type="primary",
     use_container_width=True,
 )
 
 if tombol_rekomendasi:
-    # Baris fitur yang tersimpan di model memiliki urutan yang sama dengan metadata.
+    # Ambil lebih banyak kandidat berdasarkan audio, lalu urutkan ulang dengan
+    # popularitas dan bonus artis yang sama.
     fitur_lagu = model._fit_X[selected_index : selected_index + 1]
+    jumlah_kandidat = min(max(50, jumlah_rekomendasi * 5) + 1, len(metadata))
     jarak, indeks = model.kneighbors(
         fitur_lagu,
-        n_neighbors=jumlah_rekomendasi + 1,
+        n_neighbors=jumlah_kandidat,
     )
 
-    rekomendasi = [
-        (idx, distance)
-        for idx, distance in zip(indeks[0], jarak[0])
-        if idx != selected_index
-    ][:jumlah_rekomendasi]
+    artis_sumber = format_artists(lagu_terpilih["artists"]).casefold()
+    kandidat = []
+
+    for idx, distance in zip(indeks[0], jarak[0]):
+        if idx == selected_index:
+            continue
+
+        lagu = metadata.iloc[idx]
+        audio_score = 1 / (1 + float(distance))
+        popularity_score = max(0.0, min(1.0, float(lagu["popularity"]) / 100))
+        same_artist = (
+            format_artists(lagu["artists"]).casefold() == artis_sumber
+        )
+
+        balanced_score = (
+            audio_score * 0.70
+            + popularity_score * 0.20
+            + float(same_artist) * 0.10
+        )
+
+        kandidat.append(
+            {
+                "index": idx,
+                "audio_score": audio_score,
+                "popularity_score": popularity_score,
+                "same_artist": same_artist,
+                "balanced_score": balanced_score,
+            }
+        )
+
+    rekomendasi = sorted(
+        kandidat,
+        key=lambda item: item["balanced_score"],
+        reverse=True,
+    )[:jumlah_rekomendasi]
 
     st.divider()
-    st.subheader("Rekomendasi Lagu Serupa")
+    st.subheader("Rekomendasi Seimbang")
     st.caption(
-        "Skor di bawah adalah kemiripan relatif berdasarkan fitur audio, "
-        "bukan probabilitas dan bukan penilaian kualitas lagu."
+        "Peringkat dihitung dari 70% kemiripan audio, 20% popularitas, dan "
+        "10% bonus jika artisnya sama. Skor ini bukan probabilitas."
     )
 
-    for urutan, (idx, distance) in enumerate(rekomendasi, start=1):
-        lagu = metadata.iloc[idx]
-        # Ubah jarak menjadi skor yang mudah dibaca. Jarak 0 menghasilkan 100.
-        skor_kemiripan = 100 / (1 + float(distance))
+    for urutan, hasil in enumerate(rekomendasi, start=1):
+        lagu = metadata.iloc[hasil["index"]]
+        skor_seimbang = hasil["balanced_score"] * 100
 
         with st.container(border=True):
             info, skor = st.columns([4, 1])
@@ -211,10 +242,15 @@ if tombol_rekomendasi:
                     f"Genre: {lagu['genre']} · Tahun: {int(lagu['year'])} · "
                     f"Popularitas: {int(lagu['popularity'])}/100"
                 )
+                bonus_artis = "Ya (+10)" if hasil["same_artist"] else "Tidak"
+                st.caption(
+                    f"Audio: {hasil['audio_score'] * 100:.1f}/100 · "
+                    f"Bonus artis sama: {bonus_artis}"
+                )
                 spotify_query = quote_plus(f"{lagu['name']} {lagu['artists']}")
                 st.link_button(
                     "Cari di Spotify",
                     f"https://open.spotify.com/search/{spotify_query}",
                 )
             with skor:
-                st.metric("Kemiripan", f"{skor_kemiripan:.1f}/100")
+                st.metric("Skor seimbang", f"{skor_seimbang:.1f}/100")
